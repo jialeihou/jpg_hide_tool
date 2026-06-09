@@ -201,6 +201,38 @@ def extract_files_from_jpg(hidden_jpg_path: Path) -> Path:
     return out_dir
 
 
+def clear_generated_files(target_dirs: list[Path] | None = None) -> dict[str, object]:
+    """清理系统生成的导入/导出文件，保留根目录。"""
+    if target_dirs is None:
+        target_dirs = [UPLOAD_DIR, OUTPUT_DIR, EXTRACT_DIR]
+
+    deleted_count = 0
+    deleted_items: list[str] = []
+    failed: list[dict[str, str]] = []
+
+    for directory in target_dirs:
+        directory.mkdir(parents=True, exist_ok=True)
+        for item in list(directory.iterdir()):
+            try:
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+                deleted_count += 1
+                deleted_items.append(str(item))
+            except Exception as e:
+                failed.append({
+                    "path": str(item),
+                    "error": str(e),
+                })
+
+    return {
+        "deleted_count": deleted_count,
+        "deleted_items": deleted_items,
+        "failed": failed,
+    }
+
+
 def parse_multipart_form(content_type: str, body: bytes) -> dict[str, list[tuple[str, bytes]]]:
     """极简 multipart/form-data 解析器，替代 Python 3.13 移除的 cgi 模块。"""
     if "multipart/form-data" not in content_type:
@@ -287,9 +319,13 @@ button:hover {{ background:#1d4ed8; }}
 .note {{ font-size:13px; color:#6b7280; line-height:1.7; margin-top:12px; }}
 .msg {{ margin-top:20px; padding:14px 16px; background:#ecfdf5; border:1px solid #a7f3d0; border-radius:12px; color:#065f46; }}
 .result {{ margin-top:20px; padding:18px; background:white; border-radius:16px; box-shadow:0 8px 24px rgba(15,23,42,.08); line-height:1.8; }}
+.cleanup {{ margin-top:20px; padding:20px 24px; background:white; border-radius:16px; box-shadow:0 8px 24px rgba(15,23,42,.08); display:flex; gap:16px; align-items:center; justify-content:space-between; }}
+.cleanup p {{ margin:0; color:#6b7280; line-height:1.7; }}
+.danger-button {{ background:#dc2626; white-space:nowrap; }}
+.danger-button:hover {{ background:#b91c1c; }}
 a {{ color:#1d4ed8; text-decoration:none; font-weight:700; }}
 ul {{ margin-top:8px; }}
-@media (max-width:800px) {{ .grid {{ grid-template-columns:1fr; }} }}
+@media (max-width:800px) {{ .grid {{ grid-template-columns:1fr; }} .cleanup {{ flex-direction:column; align-items:flex-start; }} }}
 </style>
 </head>
 <body>
@@ -322,6 +358,12 @@ ul {{ margin-top:8px; }}
       </form>
       <div class="note">释放结果会保存在程序目录 extracted 文件夹下，可在页面下载，也可直接打开该目录查看。</div>
     </div>
+  </div>
+  <div class="cleanup">
+    <p><b>清理导入/导出文件</b><br>删除系统保存的上传缓存、隐藏 JPG/ZIP、释放文件目录，只保留 uploads、output、extracted 三个文件夹。</p>
+    <form action="/clear-files" method="post" onsubmit="return confirm('确定要删除 uploads、output、extracted 中的系统生成文件吗？此操作不可撤销。');">
+      <button class="danger-button" type="submit">清理导入/导出文件</button>
+    </form>
   </div>
   {result_html}
 </div>
@@ -416,6 +458,21 @@ class Handler(BaseHTTPRequestHandler):
                 link = f'/download?path={quote(str(out_dir))}'
                 result = f'<div class="result"><b>释放成功：</b><br><ul>{files_li}</ul><a href="{link}">下载释放结果 ZIP</a><br><span class="note">释放目录：{html.escape(str(out_dir))}</span></div>'
                 self.send_html(page("释放隐藏文件完成。", result))
+                return
+
+            if self.path == "/clear-files":
+                result = clear_generated_files()
+                deleted_count = result["deleted_count"]
+                failed = result["failed"]
+                if failed:
+                    failed_html = "".join(
+                        f"<li>{html.escape(item['path'])}：{html.escape(item['error'])}</li>"
+                        for item in failed
+                    )
+                    detail = f'<div class="result"><b>已清理 {deleted_count} 项系统生成文件。</b><br><span class="note">以下项目清理失败：</span><ul>{failed_html}</ul></div>'
+                else:
+                    detail = f'<div class="result"><b>已清理 {deleted_count} 项系统生成文件。</b><br><span class="note">uploads、output、extracted 目录已保留，可继续使用。</span></div>'
+                self.send_html(page("批量清理完成。", detail))
                 return
 
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
